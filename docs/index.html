@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Tools for Many Task Computing</title>
+    <meta charset="utf-8">
+    <meta name="author" content="Center for Advanced Research Computing at University of Southern California" />
+    <link rel="stylesheet" href="main.css" type="text/css" />
+  </head>
+  <body>
+    <textarea id="source">
+
+class: center, top, title-slide
+
+# Tools for Many Task Computing
+
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+### Center for Advanced Research Computing <br> University of Southern California <br>
+
+#### Last updated on 2026-03-20
+
+---
+
+## Outline
+
+1. Many task computing
+2. Slurm job arrays
+3. HyperShell
+4. Other tools
+5. Resources and support
+6. Exercises
+
+---
+
+class: center, middle, inverse
+
+## Section 1
+
+### Many task computing (MTC)
+
+---
+
+## Key terms and definitions
+
+- **job**
+  - a workload composed of one or more tasks to perform
+- **task**
+  - a distinct unit of work to perform
+- **many task computing (MTC)**
+  - running a large number of (similar) computing tasks
+
+---
+
+## What is many task computing?
+
+- Running a large number of (similar) computing tasks
+- Repeating tasks with different inputs
+  - Typically tasks are independent
+  - For example, data processing workflows
+  - For example, model parameter sweeps
+- Parallel processing of tasks
+  - Across multiple CPUs or GPUs
+  - Across one or more compute nodes
+
+---
+
+class: center, middle, inverse
+
+## Section 2
+
+### Slurm job arrays
+
+---
+
+## Slurm job arrays
+
+- Slurm feature for submitting and managing collections of similar batch jobs quickly and easily
+- Useful for repetitive workloads that follow a common job pattern
+- Submit many similar jobs using one job script
+- All jobs in the array use the same options (e.g., nodes, CPUs, time, etc.)
+- For long-running or short-running tasks
+- [Slurm docs for job arrays](https://slurm.schedmd.com/job_array.html)
+
+---
+
+## Array index is key
+
+- Use `#SBATCH --array=` option with some index (e.g., 1-10)
+- Slurm creates environment variable $SLURM_ARRAY_TASK_ID
+  - Evalutes to array index value (e.g., 1, 2, 3, etc.)
+- Use this variable to select different inputs
+  - Within script/program or as script/program argument
+  - For example, select file to use from list of files
+  - For example, select parameters to use from list of model parameter sets
+- Can also use this variable to save to different outputs
+
+---
+
+## Simple Slurm job array example
+
+```bash
+#!/bin/bash
+
+#SBATCH --account=<project_id>
+#SBATCH --partition=main
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=2G
+#SBATCH --time=5:00
+#SBATCH --array=1-10
+
+echo "Hello world from array task $SLURM_ARRAY_TASK_ID"
+```
+
+---
+
+## Simple Slurm job array example (continued)
+
+Submit via sbatch:
+
+```bash
+$ sbatch array.slurm
+Submitted batch job 111222
+```
+
+Multiple jobs are submitted with multiple output files:
+
+```bash
+$ cat slurm-111222_1.out
+==========================================
+SLURM_JOB_ID = 111223
+SLURM_JOB_NODELIST = b22-16
+TMPDIR = /tmp/SLURM_111223
+==========================================
+Hello world from array task 1
+```
+
+---
+
+## File processing example
+
+```bash
+#!/bin/bash
+
+#SBATCH --account=<project_id>
+#SBATCH --partition=main
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=16G
+#SBATCH --time=1:00:00
+#SBATCH --array=1-10
+
+echo "Task ID = $SLURM_ARRAY_TASK_ID"
+
+module purge
+module load rstats/4.5.2
+
+Rscript files.R
+```
+
+---
+
+## File processing example (continued)
+
+```r
+# R script to process data files (job array)
+
+library(data.table)
+
+# Select file to process
+files <- list.files("data/raw", full.names = TRUE)
+task <- as.numeric(Sys.getenv("SLURM_ARRAY_TASK_ID"))
+file <- files[task]
+file
+
+# Read file
+data <- fread(file)
+
+# Filter rows
+data <- data[col1 > 3]
+
+# Write processed data to file
+out <- paste0("data/derived/file-", task, ".csv")
+fwrite(data, out)
+```
+
+---
+
+## Slurm environment variables
+
+- SLURM_ARRAY_JOB_ID = the first job ID of the array
+- SLURM_ARRAY_TASK_ID = the job array index value
+- SLURM_ARRAY_TASK_COUNT = the number of tasks in the job array
+- SLURM_ARRAY_TASK_MAX = the highest job array index value
+- SLURM_ARRAY_TASK_MIN = the lowest job array index value
+
+---
+
+## Additional notes
+
+- Programming languages use different index bases
+  - 0-based indexing (Bash, Python)
+  - 1-based indexing (Julia, R, MATLAB)
+- Job limits restrict the size of the array
+  - 5000 jobs can be submitted
+  - 100 jobs can run at the same time
+  - Relatively small number of GPUs
+  - May need to submit in batches
+- Array index can be more complicated as needed
+  - For example, `#SBATCH --array=1,5,8-20`
+  - For example, `#SBATCH --array=0-100:10` (step size of 10: 0, 10, 20, etc.)
+  - For example, `#SBATCH --array=1-100%10` (only run 10 jobs simultaneously)
+
+---
+
+class: center, middle, inverse
+
+## Section 3
+
+### HyperShell
+
+---
+
+## HyperShell utility
+
+- Cross-platform utility for processing shell commands over a distributed, asynchronous queue
+- Use HyperShell to run multiple tasks (jobs) within a single Slurm job
+  - Aka job packing
+  - Functions like a mini-scheduler within the Slurm job
+  - Run tasks across one or more compute nodes (for CPUs or GPUs)
+  - Primarily for many short-running tasks (e.g., < 1 hr each)
+- Tasks can be run in sequence or parallel
+  - Depends on available resources (CPUs, memory, GPUs)
+  - Depends on how much memory tasks need
+  - Depends on if tasks themselves are parallelized
+- [HyperShell website](https://hypershell.readthedocs.io)
+
+---
+
+## Simple HyperShell example
+
+```bash
+#!/bin/bash
+
+#SBATCH --account=<project_id>
+#SBATCH --partition=main
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=16G
+#SBATCH --time=5:00
+
+module purge
+module load hypershell/2.7.2
+
+yes 'echo "Hello world from task $TASK_ID"' | head -n 100 > tasks.txt
+
+hs cluster tasks.txt --no-db --launcher=srun \
+    --template="{} >& task-\$TASK_ID.log" \
+    --failures=failures-$SLURM_JOB_ID.txt
+```
+
+---
+
+## HyperShell example with parallelized tasks
+
+```bash
+#!/bin/bash
+
+#SBATCH --account=<project_id>
+#SBATCH --partition=main
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=4
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=8G
+#SBATCH --time=1:00:00
+
+module purge
+module load hypershell/2.7.2
+module load julia/1.12.5
+
+export JULIA_NUM_THREADS=$SLURM_CPUS_PER_TASK
+
+hs cluster tasks-julia.txt --no-db --launcher=srun \
+    --template="{} >& task-\$TASK_ID.log" \
+    --failures=failures-$SLURM_JOB_ID.txt
+```
+
+---
+
+## HyperShell example with GPU tasks
+
+```bash
+#!/bin/bash
+
+#SBATCH --account=<project_id>
+#SBATCH --partition=gpu
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=2
+#SBATCH --cpus-per-task=2
+#SBATCH --gpus-per-task=1
+#SBATCH --mem=32G
+#SBATCH --time=5:00
+
+module purge
+module load hypershell/2.7.2
+
+yes 'echo "Hello world from task $TASK_ID on $(nvidia-smi -L)"' | head -n 50 > tasks.txt
+
+hs cluster tasks.txt --no-db --launcher=srun \
+    --template="{} >& task-\$TASK_ID.log" \
+    --failures=failures-$SLURM_JOB_ID.txt
+```
+
+---
+
+## Additional notes
+
+- Relevant Slurm limits include time, CPUs, and GPUs
+- May need to submit multiple Slurm jobs
+  - Batch tasks into separate Slurm jobs
+  - Can use a Slurm job array!
+- Tasks themselves can use many resources
+  - Single core
+  - Multiple cores (e.g., via multi-processing)
+  - Multiple nodes (e.g., via MPI)
+  - Multiple GPUs (e.g., via NCCL)
+- Tasks do not necessarily need to run in parallel
+  - Can run tasks in sequence
+  - But the task itself is parallelized and uses multiple cores or nodes
+  - Remember the memory limit on a single node
+
+---
+
+class: center, middle, inverse
+
+## Section 4
+
+### Other tools
+
+---
+
+## Other tools for MTC
+
+- Shell command processors
+  - [`xargs -P`](https://www.man7.org/linux/man-pages/man1/xargs.1.html)
+  - [GNU parallel](https://www.gnu.org/software/parallel/)
+- Language-specific tools
+  - Python: [Dask](https://www.dask.org)
+  - R: [future](https://www.futureverse.org), [clustermq](https://mschubert.github.io/clustermq/)
+  - Julia: [Dagger.jl](https://juliaparallel.org/Dagger.jl/stable/), [SlurmClusterManager.jl](https://github.com/JuliaParallel/SlurmClusterManager.jl)
+  - MATLAB: [Parallel Computing Toolbox](https://www.mathworks.com/products/parallel-computing.html)
+- General workflow tools
+  - [HyperQueue](https://it4innovations.github.io/hyperqueue/stable/)
+  - [Makeflow](https://ccl.cse.nd.edu/software/makeflow/)
+  - [Snakemake](https://snakemake.github.io)
+  - [Pegasus](https://pegasus.isi.edu)
+
+---
+
+class: center, middle, inverse
+
+## Section 5
+
+### Resources and support
+
+---
+
+## CARC support
+
+- [Workshop materials](https://github.com/uschpc/workshop-mtc)
+- [Submit a support ticket](https://www.carc.usc.edu/user-support/submit-ticket)
+- Office Hours
+  - Every Tuesday 2:30-5pm
+  - Get Zoom link [here](https://www.carc.usc.edu/user-support/office-hours-and-consultations)
+
+---
+
+class: center, middle, inverse
+
+## Section 6
+
+### Exercises
+
+---
+
+## Exercises
+
+1. Submit a Slurm job array using index 0-1000 with step size 100
+2. Submit a HyperShell job using 8 nodes with 1 CPU core each
+3. Submit a Slurm job array that uses HyperShell
+
+    </textarea>
+    <script src="https://remarkjs.com/downloads/remark-latest.min.js">
+    </script>
+    <script>
+      var slideshow = remark.create({
+        ratio: "16:10",
+        highlightStyle: "ascetic",
+      });
+    </script>
+  </body>
+</html>
