@@ -70,6 +70,19 @@ class: center, middle, inverse
 
 ---
 
+## Tools for MTC
+
+- Use tools designed for MTC
+  - Slurm job arrays
+  - HyperShell
+- Easily submit thousands of tasks
+- Various benefits
+  - Automation and scaling
+  - Fault tolerance and retries
+  - Job packing
+
+---
+
 class: center, middle, inverse
 
 ## Section 2
@@ -130,7 +143,7 @@ $ sbatch array.slurm
 Submitted batch job 111222
 ```
 
-Multiple jobs are submitted with multiple output files:
+Multiple jobs are created with unique output files:
 
 ```bash
 $ cat slurm-111222_1.out
@@ -194,13 +207,34 @@ fwrite(data, out)
 
 ---
 
-## Slurm environment variables
+## Array index option arguments
 
-- SLURM_ARRAY_JOB_ID = the first job ID of the array
-- SLURM_ARRAY_TASK_ID = the job array index value
-- SLURM_ARRAY_TASK_COUNT = the number of tasks in the job array
-- SLURM_ARRAY_TASK_MAX = the highest job array index value
-- SLURM_ARRAY_TASK_MIN = the lowest job array index value
+- `#SBATCH --array=1-100`
+  - Continuous sequence
+- `#SBATCH --array=1,5,12-20`
+  - Specific index values
+  - Useful for running specific tasks in an array
+- `#SBATCH --array=0-100:10`
+  - Sequence with steps
+  - For example, step size of 10: 0, 10, 20, etc.
+- `#SBATCH --array=1-100%10`
+  - Continuous sequence with run limit
+  - For example, only run 10 jobs at the same time
+
+---
+
+## Slurm environment variables for job array
+
+- SLURM_ARRAY_TASK_ID
+  - the job array index value
+- SLURM_ARRAY_TASK_COUNT
+  - the number of tasks in the job array
+- SLURM_ARRAY_TASK_MAX
+  - the highest job array index value
+- SLURM_ARRAY_TASK_MIN
+  - the lowest job array index value
+- SLURM_ARRAY_JOB_ID
+  - the first job ID of the array
 
 ---
 
@@ -209,15 +243,12 @@ fwrite(data, out)
 - Programming languages use different index bases
   - 0-based indexing (Bash, Python)
   - 1-based indexing (Julia, R, MATLAB)
-- Job limits restrict the size of the array
-  - 5000 jobs can be submitted
-  - 100 jobs can run at the same time
-  - Relatively small number of GPUs
-  - May need to submit in batches
-- Array index can be more complicated as needed
-  - For example, `#SBATCH --array=1,5,8-20`
-  - For example, `#SBATCH --array=0-100:10` (step size of 10: 0, 10, 20, etc.)
-  - For example, `#SBATCH --array=1-100%10` (only run 10 jobs simultaneously)
+- User job limits restrict the size of the array
+  - Submitting a large number of jobs at the same time negatively impacts Slurm
+  - Limits vary by Slurm partition
+  - main partition = 5000 jobs can be in the queue at one time
+  - gpu partition = 100 jobs can be in the queue at one time
+  - May need to submit array in batches
 
 ---
 
@@ -231,21 +262,23 @@ class: center, middle, inverse
 
 ## HyperShell utility
 
-- Cross-platform utility for processing shell commands over a distributed, asynchronous queue
+- Cross-platform utility for processing shell commands from a task queue
 - Use HyperShell to run multiple tasks (jobs) within a single Slurm job
   - Aka job packing
   - Functions like a mini-scheduler within the Slurm job
-  - Run tasks across one or more compute nodes (for CPUs or GPUs)
-  - Primarily for many short-running tasks (e.g., < 1 hr each)
+  - Schedules tasks on CPUs or GPUs
+  - Useful for many short-running tasks (e.g., < 1 hr each)
 - Tasks can be run in sequence or parallel
   - Depends on available resources (CPUs, memory, GPUs)
-  - Depends on how much memory tasks need
-  - Depends on if tasks themselves are parallelized
+  - Depends on how much memory each task needs
+  - Depends on if tasks are serial or parallel
 - [HyperShell website](https://hypershell.readthedocs.io)
 
 ---
 
-## Simple HyperShell example
+## HyperShell example 1
+
+Running serial tasks in parallel
 
 ```bash
 #!/bin/bash
@@ -253,9 +286,9 @@ class: center, middle, inverse
 #SBATCH --account=<project_id>
 #SBATCH --partition=main
 #SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=16G
+#SBATCH --ntasks-per-node=16
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=2G
 #SBATCH --time=5:00
 
 module purge
@@ -265,21 +298,23 @@ yes 'echo "Hello world from task $TASK_ID"' | head -n 100 > tasks.txt
 
 hs cluster tasks.txt --no-db --launcher=srun \
     --template="{} >& task-\$TASK_ID.log" \
-    --failures=failures-$SLURM_JOB_ID.txt
+    --failures=slurm-$SLURM_JOB_ID-failures.log
 ```
 
 ---
 
-## HyperShell example with parallelized tasks
+## HyperShell example 2
+
+Running parallel tasks in sequence
 
 ```bash
 #!/bin/bash
 
 #SBATCH --account=<project_id>
 #SBATCH --partition=main
-#SBATCH --nodes=4
-#SBATCH --ntasks-per-node=4
-#SBATCH --cpus-per-task=4
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=8
 #SBATCH --mem=8G
 #SBATCH --time=1:00:00
 
@@ -289,14 +324,44 @@ module load julia/1.12.5
 
 export JULIA_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
-hs cluster tasks-julia.txt --no-db --launcher=srun \
+hs cluster tasks.txt --no-db --launcher=srun \
     --template="{} >& task-\$TASK_ID.log" \
-    --failures=failures-$SLURM_JOB_ID.txt
+    --failures=slurm-$SLURM_JOB_ID-failures.log
 ```
 
 ---
 
-## HyperShell example with GPU tasks
+## HyperShell example 3
+
+Running parallel tasks in parallel
+
+```bash
+#!/bin/bash
+
+#SBATCH --account=<project_id>
+#SBATCH --partition=main
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=8
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=0
+#SBATCH --time=1:00:00
+
+module purge
+module load hypershell/2.7.2
+module load julia/1.12.5
+
+export JULIA_NUM_THREADS=$SLURM_CPUS_PER_TASK
+
+hs cluster tasks.txt --no-db --launcher=srun \
+    --template="{} >& task-\$TASK_ID.log" \
+    --failures=slurm-$SLURM_JOB_ID-failures.log
+```
+
+---
+
+## HyperShell example 4
+
+Running single GPU tasks in parallel
 
 ```bash
 #!/bin/bash
@@ -306,37 +371,31 @@ hs cluster tasks-julia.txt --no-db --launcher=srun \
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=2
 #SBATCH --cpus-per-task=2
-#SBATCH --gpus-per-task=1
+#SBATCH --gpus-per-task=a100:1
 #SBATCH --mem=32G
-#SBATCH --time=5:00
+#SBATCH --time=1:00:00
 
 module purge
 module load hypershell/2.7.2
-
-yes 'echo "Hello world from task $TASK_ID on $(nvidia-smi -L)"' | head -n 50 > tasks.txt
+module load ver/2506
+module load gcc/14.3.0
+module load cuda/12.9.1
 
 hs cluster tasks.txt --no-db --launcher=srun \
     --template="{} >& task-\$TASK_ID.log" \
-    --failures=failures-$SLURM_JOB_ID.txt
+    --failures=slurm-$SLURM_JOB_ID-failures.log
 ```
 
 ---
 
 ## Additional notes
 
-- Relevant Slurm limits include time, CPUs, and GPUs
-- May need to submit multiple Slurm jobs
-  - Batch tasks into separate Slurm jobs
+- Node resource limits will determine HyperShell setup
+  - Number of CPUs
+  - Amount of memory
+  - Number of GPUs
+  - May need to run tasks in batches in separate Slurm jobs
   - Can use a Slurm job array!
-- Tasks themselves can use many resources
-  - Single core
-  - Multiple cores (e.g., via multi-processing)
-  - Multiple nodes (e.g., via MPI)
-  - Multiple GPUs (e.g., via NCCL)
-- Tasks do not necessarily need to run in parallel
-  - Can run tasks in sequence
-  - But the task itself is parallelized and uses multiple cores or nodes
-  - Remember the memory limit on a single node
 
 ---
 
